@@ -4,10 +4,10 @@ import torch.optim as optim
 import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 from torch.utils.data import Dataset, DataLoader
-
+import numpy as np
 import torchvision
 import torchvision.transforms as transforms
-
+import itertools
 import os
 import time
 import argparse
@@ -18,7 +18,7 @@ from model import Model
 import warnings
 warnings.filterwarnings("ignore")
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = 'cuda:1' if torch.cuda.is_available() else 'cpu'
 
 transform_test = transforms.Compose([
     transforms.ToTensor(),
@@ -28,9 +28,9 @@ transform_test = transforms.Compose([
 def train(opt):
     net = Model(opt)
     net = net.to(device)
-    if device == 'cuda':
-        net = torch.nn.DataParallel(net)
-        cudnn.benchmark = True
+    # if device == 'cuda':
+    #     net = torch.nn.DataParallel(net)
+    #     cudnn.benchmark = True
 
     train_dataset = PlayDataset(is_train=True, train_val=0.9, transform=transform_test)
     trainloader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=8)
@@ -48,12 +48,24 @@ def train(opt):
         total = 0
         for batch_idx, sample_batch in enumerate(trainloader):
             inputs = sample_batch['image'].type(torch.FloatTensor).to(device)
-            targets = sample_batch['label'].to(device)
+            targets = sample_batch['label'].type(torch.IntTensor).to(device)
             preds = net(inputs, None).log_softmax(2)
             preds_size = torch.IntTensor([preds.size(1)] * targets.shape[0])
-            
+
+            '''计算正确率'''
+            y_pred_labels = []
+            for sample in preds:
+                _, y = sample.max(1)
+                y = [int(k) for k, g in itertools.groupby(y)]  # 去掉重复的
+                while 0 in y:  # 去掉0
+                    y.remove(0)
+                y_pred_labels.append(y)
+            for pred, label in zip(y_pred_labels, targets.tolist()):
+                if (pred == label):
+                    correct += 1
+
             preds = preds.permute(1, 0, 2)
-            length = torch.ones(targets.shape[0]) * 4
+            length = torch.IntTensor([4]*targets.shape[0])
             cost = criterion(preds, targets, preds_size.to(device), length.to(device))
             net.zero_grad()
             cost.backward()
@@ -62,9 +74,11 @@ def train(opt):
             
             train_loss += cost.item()
             total += targets.size(0)
+
+
         print(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
             % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-        
+
         net.eval()
         test_loss = 0
         correct = 0
@@ -72,15 +86,29 @@ def train(opt):
         with torch.no_grad():
             for batch_idx, sample_batch in enumerate(testloader):
                 inputs = sample_batch['image'].type(torch.FloatTensor).to(device)
-                targets = sample_batch['label'].to(device)
+                targets = sample_batch['label'].type(torch.IntTensor).to(device)
                 preds = net(inputs, None).log_softmax(2)
                 preds_size = torch.IntTensor([preds.size(1)] * targets.shape[0])
-                
+
+                '''计算正确率'''
+                y_pred_labels = []
+                for sample in preds:
+                    _, y = sample.max(1)
+                    y = [int(k) for k, g in itertools.groupby(y)]  # 去掉重复的
+                    while 0 in y:  # 去掉0
+                        y.remove(0)
+                    y_pred_labels.append(y)
+                for pred, label in zip(y_pred_labels, targets.tolist()):
+                    if (pred == label):
+                        correct += 1
+
                 preds = preds.permute(1, 0, 2)
-                length = torch.ones(targets.shape[0]) * 4
+                # length = torch.ones(targets.shape[0]) * 4
+                length=torch.IntTensor([4]*targets.shape[0])
                 cost = criterion(preds, targets, preds_size.to(device), length.to(device))
                 test_loss += cost.item()
                 total += targets.size(0)
+
 
             sample = preds.permute(1, 0, 2)[0]
             _, predicted = sample.max(1)
@@ -88,6 +116,8 @@ def train(opt):
             print(targets[0])
             print(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
                 % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
+
+
     # save model
     state = {
             'net': net.state_dict(),
@@ -97,7 +127,7 @@ def train(opt):
     torch.save(state, './checkpoint/first.t7')
 
 if __name__ == '__main__':
-    import argparse
+
     parser = argparse.ArgumentParser()
     """ Model Architecture """
     parser.add_argument('--Transformation', type=str, default="None", help='Transformation stage. None|TPS')
@@ -113,3 +143,19 @@ if __name__ == '__main__':
     opt = parser.parse_args()
     opt.num_class = 63
     train(opt)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
